@@ -1,0 +1,14 @@
+# Environment variables — never commit real secrets or personal config
+.env
+
+# Captured footage — don't push recordings to GitHub
+motion_captures/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+
+# OS junk
+.DS_Store
+Thumbs.db

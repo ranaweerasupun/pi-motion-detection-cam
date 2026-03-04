@@ -1,0 +1,30 @@
+services:
+  motion-camera:
+    build: .
+    container_name: motion_security_camera
+
+    # Load all variables from .env and pass them into the container.
+    # Docker Compose reads .env automatically — this makes those
+    # variables available as environment variables inside the running container.
+    env_file:
+      - .env
+
+    # Required for camera and hardware access
+    privileged: true
+
+    # Pass through camera and video devices
+    devices:
+      - /dev/video0:/dev/video0
+      - /dev/video1:/dev/video1  # may vary per Pi/camera module
+
+    # Required for libcamera to detect the camera hardware
+    volumes:
+      - /run/udev:/run/udev:ro                        # Device event access
+      - ./motion_captures:/app/motion_captures        # Persist captured files on host
+
+    # Restart automatically unless manually stopped
+    restart: unless-stopped
+
+    # Pass through environment variables (optional overrides)
+    environment:
+      - PYTHONUNBUFFERED=1  # Ensures print() logs appear in real time
