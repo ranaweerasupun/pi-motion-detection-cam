@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# the fixed motion_security_camera.py code
 from picamera2 import Picamera2, Preview
 from picamera2.encoders import H264Encoder
 import cv2
@@ -8,43 +7,53 @@ import time
 from datetime import datetime
 import os
 
-# Configuration
-THRESHOLD = 25
-MIN_AREA = 800
-BLUR_SIZE = 21
-MOTION_DURATION = 5  # Seconds to record after motion stops
-OUTPUT_DIR = "motion_captures"
-SAVE_PHOTOS = True
-SAVE_VIDEOS = True
+# ---------------------------------------------------------------------------
+# Configuration — values are read from environment variables (set via .env).
+# os.getenv(KEY, default) reads the variable if present, or falls back to the
+# default so the script still works even without a .env file.
+# ---------------------------------------------------------------------------
+THRESHOLD       = int(os.getenv("THRESHOLD", 25))
+MIN_AREA        = int(os.getenv("MIN_AREA", 800))
+BLUR_SIZE       = int(os.getenv("BLUR_SIZE", 21))
+MOTION_DURATION = int(os.getenv("MOTION_DURATION", 5))
+SAVE_PHOTOS     = os.getenv("SAVE_PHOTOS", "true").lower() == "true"
+SAVE_VIDEOS     = os.getenv("SAVE_VIDEOS", "true").lower() == "true"
+OUTPUT_DIR      = os.getenv("OUTPUT_DIR", "motion_captures")
 
-# Create output directory
+# Camera resolution — main stream for recording, lores for motion detection
+MAIN_WIDTH   = int(os.getenv("MAIN_WIDTH", 1920))
+MAIN_HEIGHT  = int(os.getenv("MAIN_HEIGHT", 1080))
+LORES_WIDTH  = int(os.getenv("LORES_WIDTH", 640))
+LORES_HEIGHT = int(os.getenv("LORES_HEIGHT", 480))
+
+# Create output directories
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(f"{OUTPUT_DIR}/photos", exist_ok=True)
 os.makedirs(f"{OUTPUT_DIR}/videos", exist_ok=True)
 
 print("Initializing security camera system...")
+print(f"  Threshold: {THRESHOLD}, Min area: {MIN_AREA}, Blur: {BLUR_SIZE}")
+print(f"  Motion duration: {MOTION_DURATION}s | Photos: {SAVE_PHOTOS} | Videos: {SAVE_VIDEOS}")
+print(f"  Main: {MAIN_WIDTH}x{MAIN_HEIGHT} | Lores: {LORES_WIDTH}x{LORES_HEIGHT}")
+
 picam2 = Picamera2()
 
-# Configure with both main and lores streams
-# Main for high-quality capture, lores for fast motion detection
-# FIX: Explicitly set lores format to RGB888 to avoid YUV420 conversion issues
+# Configure with both main and lores streams.
+# Main is used for high-quality capture; lores is used for fast motion detection.
 config = picam2.create_video_configuration(
-    main={"size": (1920, 1080)},  # High quality for recording
-    lores={"size": (640, 480), "format": "RGB888"}     # Low res for motion detection in RGB
+    main={"size": (MAIN_WIDTH, MAIN_HEIGHT)},
+    lores={"size": (LORES_WIDTH, LORES_HEIGHT), "format": "RGB888"}
 )
 picam2.configure(config)
 picam2.start()
 time.sleep(2)
 
-# Setup for video recording
 encoder = H264Encoder()
 
-print("Security camera active...")
-print(f"Output directory: {OUTPUT_DIR}")
-print(f"Threshold: {THRESHOLD}, Min area: {MIN_AREA}")
+print(f"\nSecurity camera active. Output directory: {OUTPUT_DIR}")
 print("\nMonitoring for motion...\n")
 
-# Initialize motion detection
+# Capture first frame to use as baseline for motion detection
 frame = picam2.capture_array("lores")
 previous_gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
 previous_gray = cv2.GaussianBlur(previous_gray, (BLUR_SIZE, BLUR_SIZE), 0)
@@ -58,84 +67,75 @@ try:
     while True:
         # Capture low-res frame for motion detection
         frame = picam2.capture_array("lores")
-        
-        # Process for motion detection
+
+        # Convert to grayscale and blur to reduce noise before comparing frames
         gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
         gray = cv2.GaussianBlur(gray, (BLUR_SIZE, BLUR_SIZE), 0)
-        
+
+        # Compute the absolute difference between current and previous frame
         frame_diff = cv2.absdiff(previous_gray, gray)
         thresh = cv2.threshold(frame_diff, THRESHOLD, 255, cv2.THRESH_BINARY)[1]
         thresh = cv2.dilate(thresh, None, iterations=2)
-        
+
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Check for motion
+
         current_motion = False
         total_motion_area = 0
-        
+
         for contour in contours:
             area = cv2.contourArea(contour)
             if area > MIN_AREA:
                 current_motion = True
                 total_motion_area += area
-        
-        # Handle motion detection
+
         if current_motion:
             timestamp = datetime.now()
-            
+
             if not motion_detected:
-                # Motion just started
                 motion_event_count += 1
                 print(f"\n[{timestamp.strftime('%H:%M:%S')}] === MOTION EVENT #{motion_event_count} STARTED ===")
-                print(f"Motion area: {total_motion_area}")
-                
-                # Save photo
+                print(f"  Motion area: {total_motion_area}")
+
                 if SAVE_PHOTOS:
                     photo_filename = f"{OUTPUT_DIR}/photos/motion_{timestamp.strftime('%Y%m%d_%H%M%S')}.jpg"
                     picam2.capture_file(photo_filename, "main")
-                    print(f"Saved photo: {photo_filename}")
-                
-                # Start recording video
+                    print(f"  Saved photo: {photo_filename}")
+
                 if SAVE_VIDEOS and not recording:
                     video_filename = f"{OUTPUT_DIR}/videos/motion_{timestamp.strftime('%Y%m%d_%H%M%S')}.h264"
                     picam2.start_encoder(encoder, output=video_filename)
                     recording = True
-                    print(f"Started recording: {video_filename}")
-            
+                    print(f"  Started recording: {video_filename}")
+
             motion_detected = True
             last_motion_time = time.time()
-        
+
         else:
-            # No motion detected
             if motion_detected:
-                # Check if motion just stopped
                 time_since_motion = time.time() - last_motion_time
-                
+
                 if time_since_motion > MOTION_DURATION:
-                    # Motion event ended
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] Motion event ended")
-                    
+
                     if recording:
                         picam2.stop_encoder()
                         recording = False
-                        print("Stopped recording")
-                    
+                        print("  Stopped recording")
+
                     print("Resuming monitoring...\n")
                     motion_detected = False
-        
-        # Update previous frame
+
         previous_gray = gray
-        
         time.sleep(0.05)
 
 except KeyboardInterrupt:
     print("\n\nShutting down security camera...")
-    
+
     if recording:
         picam2.stop_encoder()
-    
+
     picam2.stop()
-    
+
     print(f"\nSession summary:")
-    print(f"Motion events detected: {motion_event_count}")
-    print(f"Files saved in: {OUTPUT_DIR}/")
+    print(f"  Motion events detected: {motion_event_count}")
+    print(f"  Files saved in: {OUTPUT_DIR}/")
