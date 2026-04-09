@@ -8,9 +8,9 @@ from datetime import datetime
 import os
 
 # ---------------------------------------------------------------------------
-# Configuration — values are read from environment variables (set via .env).
-# os.getenv(KEY, default) reads the variable if present, or falls back to the
-# default so the script still works even without a .env file.
+# Configuration — pulled from environment variables so nothing sensitive
+# needs to live in the source code. os.getenv falls back to the default
+# if a variable isn't set, so the script runs fine without a .env file too.
 # ---------------------------------------------------------------------------
 THRESHOLD       = int(os.getenv("THRESHOLD", 25))
 MIN_AREA        = int(os.getenv("MIN_AREA", 800))
@@ -38,8 +38,9 @@ print(f"  Main: {MAIN_WIDTH}x{MAIN_HEIGHT} | Lores: {LORES_WIDTH}x{LORES_HEIGHT}
 
 picam2 = Picamera2()
 
-# Configure with both main and lores streams.
-# Main is used for high-quality capture; lores is used for fast motion detection.
+# Two streams running simultaneously: main at full resolution for capture,
+# lores at a fraction of that for the motion detection loop. Running both
+# together means there's no resolution switching overhead mid-event.
 config = picam2.create_video_configuration(
     main={"size": (MAIN_WIDTH, MAIN_HEIGHT)},
     lores={"size": (LORES_WIDTH, LORES_HEIGHT), "format": "RGB888"}
@@ -53,7 +54,8 @@ encoder = H264Encoder()
 print(f"\nSecurity camera active. Output directory: {OUTPUT_DIR}")
 print("\nMonitoring for motion...\n")
 
-# Capture first frame to use as baseline for motion detection
+# Grab the first frame to establish a baseline for comparison.
+# Everything after this is measured as a delta from the current reference.
 frame = picam2.capture_array("lores")
 previous_gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
 previous_gray = cv2.GaussianBlur(previous_gray, (BLUR_SIZE, BLUR_SIZE), 0)
@@ -68,11 +70,14 @@ try:
         # Capture low-res frame for motion detection
         frame = picam2.capture_array("lores")
 
-        # Convert to grayscale and blur to reduce noise before comparing frames
+        # Grayscale + blur before diffing — colour adds no useful information
+        # for detecting movement, and blurring suppresses pixel-level noise
+        # that would otherwise trigger false positives.
         gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
         gray = cv2.GaussianBlur(gray, (BLUR_SIZE, BLUR_SIZE), 0)
 
-        # Compute the absolute difference between current and previous frame
+        # Absolute difference between this frame and the previous one.
+        # Pixels that changed significantly become white; the rest stay black.
         frame_diff = cv2.absdiff(previous_gray, gray)
         thresh = cv2.threshold(frame_diff, THRESHOLD, 255, cv2.THRESH_BINARY)[1]
         thresh = cv2.dilate(thresh, None, iterations=2)
@@ -114,6 +119,8 @@ try:
             if motion_detected:
                 time_since_motion = time.time() - last_motion_time
 
+                # Don't stop recording the moment motion disappears — wait
+                # MOTION_DURATION seconds in case activity resumes immediately.
                 if time_since_motion > MOTION_DURATION:
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] Motion event ended")
 
