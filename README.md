@@ -93,7 +93,7 @@ motion_captures/
 
 ---
 
-## How It Works
+## Working Mechanism...
 
 1. A low-resolution (640×480) RGB stream runs continuously for motion analysis.
 2. Each frame is converted to grayscale and blurred to reduce noise.
